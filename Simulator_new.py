@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 class Simulation:
-    def __init__(self, t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic',
+    def __init__(self, t, steps, particles, masses=None, save_every=1, verlet_type='basic',
                  boundary_condition=False):
         if verlet_type not in ['basic', 'velocity', 'euler']:
             raise ValueError(rf"`verlet_type` should be either 'basic' or 'velocity' not {verlet_type}")
@@ -23,35 +23,44 @@ class Simulation:
 
         self.steps = steps
         self.particles = particles
-        self.times = np.linspace(t_0, t_1, steps)
-        self.dt = self.times[1] - self.times[0]
+        self.boundary_condition = boundary_condition
+        self.dt = t/(steps-1)
         self.save_every = save_every
+        self.box_size = 1.2*(math.ceil(particles ** (1 / 3)))
+        self._flat_mass = self.particle_mass.flatten()
+
+        self.times = np.linspace(0, t, steps)
         self.kinetic = np.zeros((steps//save_every))
         self.potential = np.zeros((steps//save_every))
         self.total_particle_velocities = np.zeros((steps//save_every, particles, 3))
         self.total_particle_locations = np.zeros((steps//save_every, particles, 3))
-        self._flat_mass = self.particle_mass.flatten()
 
         self.particle_velocities = self._initial_vel(particles, self.particle_mass)
         self.particle_locations = self._initial_pos(particles)
         self.total_particle_locations[0] = self.particle_locations
         self.total_particle_velocities[0] = self.particle_velocities
+        boxsize = self.box_size if boundary_condition else -1
         self.kinetic[0], self.potential[0] = self.calc_energies(self.particle_locations, self.particle_velocities,
-                                                                self._flat_mass, self.particles)
+                                                                self._flat_mass, self.particles, boxsize)
         self.last_particle_locations = self.particle_locations
 
     def execute(self):
+        if self.boundary_condition:
+            box_size = self.box_size
+        else:
+            box_size = -1
+
         if self.verlet_type == 'basic':
-            def stepper(): self._do_step_loc(self._do_step_numba_basic)
+            def stepper(): self._do_step_loc(self._do_step_numba_basic, box_size)
         elif self.verlet_type == 'velocity':
-            def stepper(): self._do_step_loc_vel(self._do_step_numba_velocity)
+            def stepper(): self._do_step_loc_vel(self._do_step_numba_velocity, box_size)
         elif self.verlet_type == 'euler':
-            def stepper(): self._do_step_loc_vel(self._do_step_numba_euler)
+            def stepper(): self._do_step_loc_vel(self._do_step_numba_euler, box_size)
         else:
             raise ValueError("`verlet_type` not recognized")
 
         # First step
-        forces = calc_forces(self.particle_locations, self.particles)
+        forces = calc_forces(self.particle_locations, self.particles, box_size)
         acc = forces / self.particle_mass
         self.particle_locations = self.last_particle_locations + self.total_particle_velocities[0] * self.dt \
                                   + 0.5 * acc * self.dt * self.dt
@@ -65,46 +74,26 @@ class Simulation:
             if (index % int(self.steps/100)) == 0:
                 print(f'step {index} of {self.steps}')
 
-    def _do_step_loc(self, numba_func):
+    def _do_step_loc(self, numba_func, box_size):
         new_particle_locations = numba_func(self.particle_mass, self.particle_locations, self.last_particle_locations,
-                                            self.particles, self.dt)
+                                            self.particles, self.dt, box_size)
         self.last_particle_locations = self.particle_locations
         self.particle_locations = new_particle_locations
         self.particle_velocities = (self.particle_locations - self.last_particle_locations) / self.dt
 
-    def _do_step_loc_vel(self, numba_func):
+    def _do_step_loc_vel(self, numba_func, box_size):
         self.last_particle_locations = self.particle_locations
         self.particle_locations, self.particle_velocities = numba_func(self.particle_mass, self.particle_locations,
                                                                        self.particle_velocities, self.particles,
-                                                                       self.dt)
-
-    # def _do_step_basic(self):
-    #     new_particle_locations = self._do_step_numba_basic(self.particle_mass, self.particle_locations,
-    #                                                        self.last_particle_locations, self.particles, self.dt)
-    #     self.last_particle_locations = self.particle_locations
-    #     self.particle_locations = new_particle_locations
-    #     self.particle_velocities = (self.particle_locations-self.last_particle_locations)/self.dt
-    #
-    # def _do_step_velocity(self):
-    #     self.last_particle_locations = self.particle_locations
-    #     self.particle_locations, self.particle_velocities = self._do_step_numba_velocity(self.particle_mass,
-    #                                                                                      self.particle_locations,
-    #                                                                                      self.particle_velocities,
-    #                                                                                      self.particles, self.dt)
-    #
-    # def _do_step_euler(self):
-    #     self.last_particle_locations = self.particle_locations
-    #     self.particle_locations, self.particle_velocities = self._do_step_numba_euler(self.particle_mass,
-    #                                                                                   self.particle_locations,
-    #                                                                                   self.particle_velocities,
-    #                                                                                   self.particles, self.dt)
+                                                                       self.dt, box_size)
 
     def _save_energies(self, index):
         self.total_particle_locations[index] = self.particle_locations
         self.total_particle_velocities[index] = self.particle_velocities
+        boxsize = self.box_size if self.boundary_condition else -1
         self.kinetic[index], self.potential[index] = self.calc_energies(self.particle_locations,
                                                                         self.particle_velocities,
-                                                                        self._flat_mass, self.particles)
+                                                                        self._flat_mass, self.particles, boxsize)
 
     def plot(self, start=0, stop=-1, every=1):
         ax = plt.figure().add_subplot(projection='3d')
@@ -124,7 +113,8 @@ class Simulation:
 
     def save(self, loc):
         np.savez_compressed(loc, time=self.save_times, loc=self.total_particle_locations, masses=self.particle_mass,
-                            velocity=self.total_particle_velocities, save_every=self.save_every)
+                            velocity=self.total_particle_velocities, save_every=self.save_every,
+                            boundary=[self.boundary_condition], boxsize=[self.box_size])
 
     @property
     def total_energy(self):
@@ -142,64 +132,80 @@ class Simulation:
         particle_mass = read['masses']
         total_particle_velocities = read['velocity']
         save_every = read['save_every']
+        boundary_condition = read['boundary'][0]
+        box_size = read['boxsize'][0]
 
         simulation = Simulation(times[0], times[1], len(times)*save_every, total_particle_locations.shape[1],
                                 particle_mass, save_every)
         simulation.total_particle_velocities = total_particle_velocities
+        boxsize = box_size if boundary_condition else -1
         for index in range(len(times)):
             simulation.kinetic[index], simulation.potential[index] = Simulation.calc_energies(total_particle_locations[index],
                                                                                               total_particle_velocities[index],
                                                                                               simulation._flat_mass,
-                                                                                              simulation.particles)
+                                                                                              simulation.particles, boxsize)
         return simulation
 
     @staticmethod
-    def run(t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic', boundary_condition=False):
-        simulation = Simulation(t_0, t_1, steps, particles, masses, save_every, verlet_type, boundary_condition)
+    def run(t, steps, particles, masses=None, save_every=1, verlet_type='basic', boundary_condition=False):
+        simulation = Simulation(t, steps, particles, masses, save_every, verlet_type, boundary_condition)
         simulation.execute()
         return simulation
 
     @staticmethod
-    @numba.njit
-    def _do_step_numba_basic(particle_mass, particle_loc, last_particle_loc, particles, dt):
-        forces = calc_forces(particle_loc, particles)
+    # @numba.njit
+    def _do_step_numba_basic(particle_mass, particle_loc, last_particle_loc, particles, dt, boxsize):
+        forces = calc_forces(particle_loc, particles, boxsize)
         acc = forces / particle_mass
         new_particle_locations = 2 * particle_loc - last_particle_loc + acc * dt * dt
+        if boxsize > 0:
+            new_particle_locations = new_particle_locations % boxsize
         return new_particle_locations
 
     @staticmethod
-    @numba.njit
-    def _do_step_numba_velocity(particle_mass, particle_loc, particle_velocity, particles, dt):
-        forces = calc_forces(particle_loc, particles)
+    # @numba.njit
+    def _do_step_numba_velocity(particle_mass, particle_loc, particle_velocity, particles, dt, boxsize):
+        forces = calc_forces(particle_loc, particles, boxsize)
         acc = forces / particle_mass
         particle_velocity = particle_velocity + 0.5*acc*dt
 
         particle_loc += particle_velocity*dt
 
-        forces = calc_forces(particle_loc, particles)
+        forces = calc_forces(particle_loc, particles, boxsize)
         acc = forces / particle_mass
         particle_velocity = particle_velocity + 0.5 * acc * dt
+        if boxsize > 0:
+            particle_loc = particle_loc % boxsize
         return particle_loc, particle_velocity
+
 
     @staticmethod
     @numba.njit
-    def _do_step_numba_euler(particle_mass, particle_loc, particle_vel, particles, dt):
-        forces = calc_forces(particle_loc, particles)
+    def _do_step_numba_euler(particle_mass, particle_loc, particle_vel, particles, dt, boxsize):
+        forces = calc_forces(particle_loc, particles, boxsize)
         acc = forces / particle_mass
         particle_vel = particle_vel + acc*dt
         particle_loc = particle_loc + particle_vel*dt
+        if boxsize > 0:
+            particle_loc = particle_loc % boxsize
         return particle_loc, particle_vel
 
     @staticmethod
     @numba.njit
-    def calc_energies(particle_locations, particle_velocity, masses, particle_num):
+    def calc_energies(particle_locations, particle_velocity, masses, particle_num, boxsize):
         kinetic = np.sum(0.5*masses*np.sum(particle_velocity**2, axis=1))
         potential = 0
+        inv_box_size = 1/boxsize
         for i in range(particle_num):
             for j in range(i+1, particle_num):
                 xij = particle_locations[i, 0] - particle_locations[j, 0]
                 yij = particle_locations[i, 1] - particle_locations[j, 1]
                 zij = particle_locations[i, 2] - particle_locations[j, 2]
+
+                if boxsize > 0:
+                    xij = xij - boxsize * round(xij * inv_box_size)
+                    yij = yij - boxsize * round(yij * inv_box_size)
+                    zij = zij - boxsize * round(zij * inv_box_size)
 
                 rij2 = xij * xij + yij * yij + zij * zij
                 potential += 4.0 * (1.0 / (rij2 ** 6) - 1.0 / (rij2 ** 3))
@@ -227,13 +233,19 @@ class Simulation:
 
 
 @numba.njit()
-def calc_forces(particle_locations, particles):
+def calc_forces(particle_locations, particles, boxsize):
     forces = np.zeros((particles, 3), dtype=float)
+    inv_box_size = 1/boxsize
     for i in range(particles):
         for j in range(i+1, particles):
             xij = particle_locations[i, 0] - particle_locations[j, 0]
             yij = particle_locations[i, 1] - particle_locations[j, 1]
             zij = particle_locations[i, 2] - particle_locations[j, 2]
+            
+            if boxsize > 0:
+                xij = xij - boxsize*round(xij*inv_box_size)
+                yij = yij - boxsize*round(yij*inv_box_size)
+                zij = zij - boxsize*round(zij*inv_box_size)
 
             rij2 = xij*xij + yij*yij + zij*zij
 
@@ -254,7 +266,7 @@ def calc_forces(particle_locations, particles):
 
 if __name__ == '__main__':
     np.random.seed(123456)
-    sim = Simulation.run(0, 1e1, int(1e6), 2, save_every=100, verlet_type='velocity')
+    sim = Simulation.run(1e1, int(1e6), 2, save_every=100, verlet_type='basic', boundary_condition=False)
     sim.plot()
     plt.show()
     sim.plot_energy()
