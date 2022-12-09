@@ -6,7 +6,8 @@ import matplotlib.pyplot as plt
 
 
 class Simulation:
-    def __init__(self, t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic'):
+    def __init__(self, t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic',
+                 boundary_condition=False):
         if verlet_type not in ['basic', 'velocity', 'euler']:
             raise ValueError(rf"`verlet_type` should be either 'basic' or 'velocity' not {verlet_type}")
         self.verlet_type = verlet_type
@@ -41,11 +42,11 @@ class Simulation:
 
     def execute(self):
         if self.verlet_type == 'basic':
-            stepper = self._do_step_basic
+            def stepper(): self._do_step_loc(self._do_step_numba_basic)
         elif self.verlet_type == 'velocity':
-            stepper = self._do_step_velocity
+            def stepper(): self._do_step_loc_vel(self._do_step_numba_velocity)
         elif self.verlet_type == 'euler':
-            stepper = self._do_step_euler
+            def stepper(): self._do_step_loc_vel(self._do_step_numba_euler)
         else:
             raise ValueError("`verlet_type` not recognized")
 
@@ -63,27 +64,40 @@ class Simulation:
                 self._save_energies(index // self.save_every)
             if (index % int(self.steps/100)) == 0:
                 print(f'step {index} of {self.steps}')
-    
-    def _do_step_basic(self):
-        new_particle_locations = self._do_step_numba_basic(self.particle_mass, self.particle_locations,
-                                                           self.last_particle_locations, self.particles, self.dt)
+
+    def _do_step_loc(self, numba_func):
+        new_particle_locations = numba_func(self.particle_mass, self.particle_locations, self.last_particle_locations,
+                                            self.particles, self.dt)
         self.last_particle_locations = self.particle_locations
         self.particle_locations = new_particle_locations
-        self.particle_velocities = (self.particle_locations-self.last_particle_locations)/self.dt
+        self.particle_velocities = (self.particle_locations - self.last_particle_locations) / self.dt
 
-    def _do_step_velocity(self):
+    def _do_step_loc_vel(self, numba_func):
         self.last_particle_locations = self.particle_locations
-        self.particle_locations, self.particle_velocities = self._do_step_numba_velocity(self.particle_mass,
-                                                                                         self.particle_locations,
-                                                                                         self.particle_velocities,
-                                                                                         self.particles, self.dt)
+        self.particle_locations, self.particle_velocities = numba_func(self.particle_mass, self.particle_locations,
+                                                                       self.particle_velocities, self.particles,
+                                                                       self.dt)
 
-    def _do_step_euler(self):
-        self.last_particle_locations = self.particle_locations
-        self.particle_locations, self.particle_velocities = self._do_step_numba_euler(self.particle_mass,
-                                                                                      self.particle_locations,
-                                                                                      self.particle_velocities,
-                                                                                      self.particles, self.dt)
+    # def _do_step_basic(self):
+    #     new_particle_locations = self._do_step_numba_basic(self.particle_mass, self.particle_locations,
+    #                                                        self.last_particle_locations, self.particles, self.dt)
+    #     self.last_particle_locations = self.particle_locations
+    #     self.particle_locations = new_particle_locations
+    #     self.particle_velocities = (self.particle_locations-self.last_particle_locations)/self.dt
+    #
+    # def _do_step_velocity(self):
+    #     self.last_particle_locations = self.particle_locations
+    #     self.particle_locations, self.particle_velocities = self._do_step_numba_velocity(self.particle_mass,
+    #                                                                                      self.particle_locations,
+    #                                                                                      self.particle_velocities,
+    #                                                                                      self.particles, self.dt)
+    #
+    # def _do_step_euler(self):
+    #     self.last_particle_locations = self.particle_locations
+    #     self.particle_locations, self.particle_velocities = self._do_step_numba_euler(self.particle_mass,
+    #                                                                                   self.particle_locations,
+    #                                                                                   self.particle_velocities,
+    #                                                                                   self.particles, self.dt)
 
     def _save_energies(self, index):
         self.total_particle_locations[index] = self.particle_locations
@@ -140,8 +154,8 @@ class Simulation:
         return simulation
 
     @staticmethod
-    def run(t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic'):
-        simulation = Simulation(t_0, t_1, steps, particles, masses, save_every, verlet_type)
+    def run(t_0, t_1, steps, particles, masses=None, save_every=1, verlet_type='basic', boundary_condition=False):
+        simulation = Simulation(t_0, t_1, steps, particles, masses, save_every, verlet_type, boundary_condition)
         simulation.execute()
         return simulation
 
@@ -240,7 +254,7 @@ def calc_forces(particle_locations, particles):
 
 if __name__ == '__main__':
     np.random.seed(123456)
-    sim = Simulation.run(0, 1e1, int(1e6), 2, save_every=100, verlet_type='euler')
+    sim = Simulation.run(0, 1e1, int(1e6), 2, save_every=100, verlet_type='velocity')
     sim.plot()
     plt.show()
     sim.plot_energy()
