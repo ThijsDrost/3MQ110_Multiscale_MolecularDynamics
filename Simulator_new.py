@@ -74,9 +74,9 @@ class Simulation:
             if (index % int(self.steps/100)) == 0:
                 print(f'step {index} of {self.steps}')
 
-    def _do_step_loc(self, numba_func, box_size):
-        new_particle_locations = numba_func(self.particle_mass, self.particle_locations, self.last_particle_locations,
-                                            self.particles, self.dt, box_size)
+    def _do_step_loc(self, new_location_function, box_size):
+        new_particle_locations = new_location_function(self.particle_mass, self.particle_locations,
+                                                       self.last_particle_locations, self.particles, self.dt, box_size)
         self.last_particle_locations = self.particle_locations
         self.particle_locations = new_particle_locations
         self.particle_velocities = (self.particle_locations - self.last_particle_locations) / self.dt
@@ -177,7 +177,6 @@ class Simulation:
         if boxsize > 0:
             particle_loc = particle_loc % boxsize
         return particle_loc, particle_velocity
-
 
     @staticmethod
     @numba.njit
