@@ -7,14 +7,19 @@ import matplotlib.pyplot as plt
 
 class Simulation:
     def __init__(self, t, steps, particles, masses=None, save_every=1, verlet_type='basic',
-                 boundary_condition=False, gaussian_mass=False):
+                 boundary_condition=False, gaussian_mass=False, seed=None):
+        self.seed = seed
+        if seed is not None:
+            np.random.seed(seed)
+
         if verlet_type not in ['basic', 'velocity', 'euler']:
             raise ValueError(rf"`verlet_type` should be either 'basic' or 'velocity' not {verlet_type}")
         self.verlet_type = verlet_type
 
         if masses is None:
+            # The shape of (particles, 1) is for making the multiplication with the velocity vector easier
             if gaussian_mass:
-                self.particle_mass = np.random.normal(1, 1, (particles, 1))
+                self.particle_mass = np.random.normal(1, 0.1, (particles, 1))
                 self.particle_mass[self.particle_mass < 0] *= -1
             else:
                 self.particle_mass = np.ones((particles, 1))
@@ -138,13 +143,14 @@ class Simulation:
         plt.plot(self.times[::self.save_every][start:stop:every], self.potential[start:stop:every], label='potential')
         plt.plot(self.times[::self.save_every][start:stop:every], self.total_energy[start:stop:every], label='total')
         plt.ylabel('Energy')  # TODO: unit?
-        plt.xlabel('Time')  # TODO: unit?
+        plt.xlabel('time')  # TODO: unit?
         plt.legend()
 
     def save(self, loc):
         np.savez_compressed(loc, time=self.save_times, loc=self.total_particle_locations, masses=self.particle_mass,
                             velocity=self.total_particle_velocities, save_every=self.save_every,
-                            boundary=[self.boundary_condition], boxsize=[self.box_size], verlet_type=[self.verlet_type])
+                            boundary=[self.boundary_condition], boxsize=[self.box_size], verlet_type=[self.verlet_type],
+                            seed=[self.seed])
 
     @property
     def total_energy(self):
@@ -156,7 +162,7 @@ class Simulation:
 
     @staticmethod
     def read(loc):
-        read = np.load(loc)
+        read = np.load(loc, allow_pickle=True)
         times = read['time']
         total_particle_locations = read['loc']
         particle_mass = read['masses']
@@ -165,10 +171,11 @@ class Simulation:
         boundary_condition = read['boundary'][0]
         box_size = read['boxsize'][0]
         verlet_type = read['verlet_type'][0]
+        seed = read['seed'][0]
 
         simulation = Simulation(t=times[-1], steps=len(times)*save_every, particles=total_particle_locations.shape[1],
                                 masses=particle_mass, save_every=save_every, boundary_condition=boundary_condition,
-                                verlet_type=verlet_type)
+                                verlet_type=verlet_type, seed=seed)
         simulation.box_size = box_size
         simulation.total_particle_locations = total_particle_locations
         simulation.total_particle_velocities = total_particle_velocities
